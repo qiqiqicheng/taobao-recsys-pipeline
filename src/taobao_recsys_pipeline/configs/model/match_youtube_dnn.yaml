@@ -1,0 +1,48 @@
+_target_: taobao_recsys_pipeline.l_module.match_module.MatchModule
+
+model:
+  _target_: taobao_recsys_pipeline.models.matching.youtube_dnn.YouTubeDNN
+  user_features:
+    _target_: taobao_recsys_pipeline.basic.features.get_hist_features
+    file: ${paths.data_dir}/processed/features/user_sequence_features.json
+    embed_dim: 64
+    pooling: mean
+  item_features:
+    _target_: taobao_recsys_pipeline.basic.features.get_target_features
+    file: ${paths.data_dir}/processed/features/item_sparse_features.json
+    embed_dim: 64
+  temperature: 1.0
+  mlp:
+    _target_: taobao_recsys_pipeline.basic.layers.MLP
+    _partial_: true   # input_dim injected by YouTubeDNN at construction time
+    output_layer: false
+    dims: [512, 256, 128]  # output_dim=128 must match item_dim (2 item features x embed_dim 64)
+    dropout: 0.2
+    activation: relu
+
+mode: 2 # 0=point-wise | 1=pair-wise | 2=list-wise
+in_batch_neg: true
+in_batch_neg_ratio: null
+hard_negative: false
+temperature: 1.0
+val_at_k_list: [ 10, 50 ]
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 0.0005
+  betas: [ 0.9, 0.95 ]
+  eps: 1e-8
+  weight_decay: 0.01
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
+  _partial_: true
+  T_0: 2000
+  T_mult: 2
+  eta_min: 1e-6
+
+# Regularization loss (optional, defaults to no regularization)
+# reg_loss:
+#   _target_: taobao_recsys_pipeline.losses.losses.RegularizationLoss
+#   embedding_l2: 1e-5

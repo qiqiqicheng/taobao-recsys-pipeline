@@ -15,6 +15,7 @@ def prepare_paths():
         raise FileNotFoundError("The data directory does not exist.")
 
     Path(ROOT_DIR / "data/processed/maps/").mkdir(parents=True, exist_ok=True)
+    Path(ROOT_DIR / "data/processed/features/").mkdir(parents=True, exist_ok=True)
     print("Directory structure is ready.")
 
 
@@ -29,12 +30,12 @@ def get_data(rows=None) -> pd.DataFrame:
     return df
 
 
-def process_dt(df):
+def process_dt(df, num_delta_time_bins):
     dt_series = pd.to_datetime(df["timestamp"], unit="s")
     df["hour_of_day"] = dt_series.dt.hour + 1
     df["day_of_week"] = dt_series.dt.dayofweek + 1
-    df["month_of_year"] = dt_series.dt.month + 1
-    df["is_weekend"] = (dt_series.dt.dayofweek >= 5).astype(int)
+    df["month_of_year"] = dt_series.dt.month
+    df["is_weekend"] = (dt_series.dt.dayofweek >= 5).astype(int) + 1
 
     # delta time
     df = df.sort_values(by=["user_id", "timestamp"])
@@ -43,7 +44,6 @@ def process_dt(df):
     # fillna with median
     df["delta_time"] = df["delta_time"].fillna(df["delta_time"].median())
     # bins
-    num_delta_time_bins = 20
     df["delta_time"], delta_time_egdes = pd.qcut(
         np.log(df["delta_time"] + 1), q=num_delta_time_bins, labels=False, retbins=True
     )
@@ -75,6 +75,17 @@ def aggregate_user_data(df):
     return user_df
 
 
+def build_and_save_mapping(series: pd.Series, maps_dir: Path, name: str, cast_int: bool = True) -> tuple[dict, dict]:
+    """Build a 1-based value→index mapping and its inverse, then persist both as JSON."""
+    val_2_idx = {(int(val) if cast_int else val): idx + 1 for idx, val in enumerate(series.unique())}
+    idx_2_val = {idx: val for val, idx in val_2_idx.items()}
+    with open(maps_dir / f"{name}_2_idx.json", "w") as f:
+        json.dump(val_2_idx, f)
+    with open(maps_dir / f"idx_2_{name}.json", "w") as f:
+        json.dump(idx_2_val, f)
+    return val_2_idx, idx_2_val
+
+
 def main():
     start = time.time()
     if DEBUG:
@@ -89,53 +100,91 @@ def main():
     df = get_data(rows=rows)
 
     # convert timestamp
-    df = process_dt(df)
+    num_delta_time_bins = 20
+    df = process_dt(df, num_delta_time_bins=num_delta_time_bins)
 
-    # convert user_id
-    user_id_2_idx = {int(user_id): idx + 1 for idx, user_id in enumerate(df["user_id"].unique())}
-    idx_2_user_id = {idx: user_id for user_id, idx in user_id_2_idx.items()}
+    maps_dir = ROOT_DIR / "data/processed/maps"
+
+    # convert user_id, item_id, cat_id, action → 1-based indices
+    user_id_2_idx, _ = build_and_save_mapping(df["user_id"], maps_dir, "user_id")
     df["user_id"] = df["user_id"].map(user_id_2_idx)
-    with open(ROOT_DIR / "data/processed/maps/user_id_2_idx.json", "w") as f:
-        json.dump(user_id_2_idx, f)
-    with open(ROOT_DIR / "data/processed/maps/idx_2_user_id.json", "w") as f:
-        json.dump(idx_2_user_id, f)
 
-    # convert item_id
-    item_id_2_idx = {int(item_id): idx + 1 for idx, item_id in enumerate(df["item_id"].unique())}
-    idx_2_item_id = {idx: item_id for item_id, idx in item_id_2_idx.items()}
+    item_id_2_idx, _ = build_and_save_mapping(df["item_id"], maps_dir, "item_id")
     df["item_id"] = df["item_id"].map(item_id_2_idx)
-    with open(ROOT_DIR / "data/processed/maps/item_id_2_idx.json", "w") as f:
-        json.dump(item_id_2_idx, f)
-    with open(ROOT_DIR / "data/processed/maps/idx_2_item_id.json", "w") as f:
-        json.dump(idx_2_item_id, f)
 
-    # convert cat_id
-    cat_id_2_idx = {int(cat_id): idx + 1 for idx, cat_id in enumerate(df["cat_id"].unique())}
-    idx_2_cat_id = {idx: cat_id for cat_id, idx in cat_id_2_idx.items()}
+    cat_id_2_idx, _ = build_and_save_mapping(df["cat_id"], maps_dir, "cat_id")
     df["cat_id"] = df["cat_id"].map(cat_id_2_idx)
-    with open(ROOT_DIR / "data/processed/maps/cat_id_2_idx.json", "w") as f:
-        json.dump(cat_id_2_idx, f)
-    with open(ROOT_DIR / "data/processed/maps/idx_2_cat_id.json", "w") as f:
-        json.dump(idx_2_cat_id, f)
 
-    # convert action
-    action_2_idx = {action: idx + 1 for idx, action in enumerate(df["action"].unique())}
-    idx_2_action = {idx: action for action, idx in action_2_idx.items()}
+    action_2_idx, _ = build_and_save_mapping(df["action"], maps_dir, "action", cast_int=False)
     df["action"] = df["action"].map(action_2_idx)
-    with open(ROOT_DIR / "data/processed/maps/action_2_idx.json", "w") as f:
-        json.dump(action_2_idx, f)
-    with open(ROOT_DIR / "data/processed/maps/idx_2_action.json", "w") as f:
-        json.dump(idx_2_action, f)
 
     # aggregate user data
     user_df = aggregate_user_data(df)
 
-    # save user data
-    user_df.to_csv(ROOT_DIR / "data/processed/user_data.csv", index=False)
-    print(f"User data saved to {ROOT_DIR / 'data/processed/user_data.csv'}")
+    # save user data (Parquet preserves native list columns, avoids ast.literal_eval overhead at load time)
+    user_df.to_parquet(ROOT_DIR / "data/processed/user_data.parquet", index=False)
+    print(f"User data saved to {ROOT_DIR / 'data/processed/user_data.parquet'}")
 
     end = time.time()
     print(f"Data preparation completed in {end - start:.2f} seconds.")
+
+    # construct features
+    # user sequence features
+    user_sequence_features = [
+        {
+            "name": "hist_item_id",
+            "vocab_size": len(item_id_2_idx) + 1,
+        },
+        {
+            "name": "hist_cat_id",
+            "vocab_size": len(cat_id_2_idx) + 1,
+        },
+        {
+            "name": "hist_action",
+            "vocab_size": len(action_2_idx) + 1,
+        },
+        {
+            "name": "hist_hour_of_day",
+            "vocab_size": 25,
+        },
+        {
+            "name": "hist_day_of_week",
+            "vocab_size": 8,
+        },
+        {
+            "name": "hist_month_of_year",
+            "vocab_size": 13,
+        },
+        {
+            "name": "hist_is_weekend",
+            "vocab_size": 3,
+        },
+        {
+            "name": "hist_delta_time",
+            "vocab_size": num_delta_time_bins + 1,
+            "edges_file": "data/processed/maps/delta_time_edges.npy",  # used for inference-time binning
+        },
+    ]
+    with open(ROOT_DIR / "data/processed/features/user_sequence_features.json", "w") as f:
+        json.dump(user_sequence_features, f, indent=4)
+
+    # user sparse faetures
+    # no user sparse features for this dataset
+
+    # item sparse faetures
+    item_sparse_features = [
+        {
+            "name": "item_id",
+            "vocab_size": len(item_id_2_idx) + 1,
+        },
+        {
+            "name": "cat_id",
+            "vocab_size": len(cat_id_2_idx) + 1,
+        },
+    ]
+
+    with open(ROOT_DIR / "data/processed/features/item_sparse_features.json", "w") as f:
+        json.dump(item_sparse_features, f, indent=4)
 
 
 if __name__ == "__main__":

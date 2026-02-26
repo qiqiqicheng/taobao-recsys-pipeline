@@ -1,10 +1,13 @@
+import ast
+import os
 from typing import Any
 
 import hydra
 import lightning as L
+import torch
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from taobao_recsys_pipeline.utils import (
     RankedLogger,
@@ -17,6 +20,10 @@ from taobao_recsys_pipeline.utils import (
 )
 
 log = RankedLogger(__name__, rank_zero_only=True)
+
+OmegaConf.register_new_resolver("eval", ast.literal_eval)
+torch.multiprocessing.set_sharing_strategy("file_system")
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
 
 @task_wrapper
@@ -85,7 +92,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     return metric_dict, object_dict
 
 
-@hydra.main(version_base="1.3", config_path="../configs", config_name="train.yaml")
+@hydra.main(version_base="1.3", config_path="../configs", config_name="match_train.yaml")
 def main(cfg: DictConfig) -> float | None:
     """Main entry point for training.
 

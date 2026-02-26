@@ -4,6 +4,11 @@ install: ## Install the virtual environment and install the pre-commit hooks
 	@uv sync
 	@uv run pre-commit install
 
+.PHONY: match-train
+match-train: ## Train the matching model
+	@echo "🚀 Training matching model"
+	@uv run python src/taobao_recsys_pipeline/scripts/match_train.py $(MAKEOVERRIDES)
+
 .PHONY: data
 data: ## Prepare data for the Taobao RecSys Pipeline
 	@echo "🚀 Preparing data"
