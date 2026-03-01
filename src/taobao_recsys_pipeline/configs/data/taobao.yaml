@@ -3,4 +3,4 @@ _target_: taobao_recsys_pipeline.datamodules.taobao_datamodule.TaobaoDataModule
 file: ${paths.data_dir}/processed/user_data.parquet
 max_seq_len: 200
 batch_size: 4
-num_workers: 0
+# num_workers: 0

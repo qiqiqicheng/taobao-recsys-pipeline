@@ -1,17 +1,7 @@
 """
-  0 – point-wise  : BCELoss (w/ explicit labels) or CrossEntropyLoss (w/ in-batch negatives)
-  1 – pair-wise   : BPRLoss(pos_score, neg_score)
-  2 – list-wise   : CrossEntropyLoss  (default for retrieval, works best with in-batch negatives)
-
-Model contract
---------------
-Two-tower models (YoutubeDNN, SASRec, …) should expose:
-    user_tower(x: dict) -> Tensor[B, D]
-    item_tower(x: dict) -> Tensor[B, D]
-    set_mode(mode: Literal["user", "item"])   # used at inference time
-
-Single-tower / interaction models (ItemCF proxy, MF, …) only need:
-    forward(x: dict) -> Tensor[B]             # point-wise probability / score
+0 – point-wise  : BCELoss (w/ explicit labels) or CrossEntropyLoss (w/ in-batch negatives)
+1 – pair-wise   : BPRLoss(pos_score, neg_score)
+2 – list-wise   : CrossEntropyLoss  (default for retrieval, works best with in-batch negatives)
 """
 
 from __future__ import annotations
@@ -223,7 +213,7 @@ class MatchModule(L.LightningModule):
 
         # Accumulate MatchMetrics during validation
         if stage == "val":
-            k = max(self.val_at_k_list)
+            k = min(max(self.val_at_k_list), B - 1)
             top_k_ids = scores.topk(k, dim=1).indices  # [B, k]
             target_ids = torch.arange(B, device=self.device)  # [B]
             self.val_metrics.update(top_k_ids, target_ids)

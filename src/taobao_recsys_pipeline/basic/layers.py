@@ -123,9 +123,9 @@ class EmbeddingLayer(nn.Module):
         embed_key: str,
     ) -> torch.Tensor:
         """Embed a single feature; returns ``[B, 1 or L, D]``."""
-        log.info(
-            f"Embedding Feature '{fea.name}' with key '{embed_key}'\n**max value: {x[fea.name].max()}  **min value: {x[fea.name].min()}"
-        )
+        # log.info(
+        #     f"Embedding Feature '{fea.name}' with key '{embed_key}'\n**max value: {x[fea.name].max()}  **min value: {x[fea.name].min()}"
+        # )
         if isinstance(fea, SparseFeature):
             return self.embed_dict[embed_key](x[fea.name].long()).unsqueeze(1)  # [B, 1, D]
         # SequenceFeature
