@@ -1,23 +1,31 @@
 """
-0 – point-wise  : BCELoss (w/ explicit labels) or CrossEntropyLoss (w/ in-batch negatives)
-1 – pair-wise   : BPRLoss(pos_score, neg_score)
-2 – list-wise   : CrossEntropyLoss  (default for retrieval, works best with in-batch negatives)
+List-wise retrieval training (CrossEntropy with in-batch negatives).
+
+This module intentionally supports only the list-wise formulation (equivalent to the old mode=2).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, cast
 
 import lightning as L
 import torch
 import torch.nn as nn
 
-from taobao_recsys_pipeline.losses.losses import BPRLoss, RegularizationLoss
+from taobao_recsys_pipeline.losses.losses import RegularizationLoss
 from taobao_recsys_pipeline.metrics.match_metrics import MatchMetrics
 from taobao_recsys_pipeline.utils.pylogger import RankedLogger
 
 log = RankedLogger(__name__)
+
+
+class SupportsTwoTowers(Protocol):
+    def user_tower(self, x: dict[str, torch.Tensor]) -> torch.Tensor: ...
+
+    def item_tower(self, x: dict[str, torch.Tensor]) -> torch.Tensor: ...
+
+    def set_mode(self, mode: Literal["user", "item"]) -> None: ...
 
 
 def _inbatch_negative_sampling(
@@ -83,20 +91,19 @@ class MatchModule(L.LightningModule):
     def __init__(
         self,
         model: nn.Module,
-        mode: Literal[0, 1, 2] = 2,
         in_batch_neg: bool = True,
         in_batch_neg_ratio: int | None = None,
         hard_negative: bool = False,
         sampler_seed: int | None = None,
         temperature: float = 1.0,
-        optimizer: Callable = torch.optim.Adam,
+        optimizer: Callable = torch.optim.AdamW,
         scheduler: Callable | None = None,
         reg_loss: RegularizationLoss | None = None,
         val_at_k_list: list[int] = [10, 50],
     ) -> None:
         super().__init__()
         self.model = model
-        self.mode = mode
+        self.tower_model = cast(SupportsTwoTowers, model)
         self.in_batch_neg = in_batch_neg
         self.in_batch_neg_ratio = in_batch_neg_ratio
         self.hard_negative = hard_negative
@@ -140,10 +147,12 @@ class MatchModule(L.LightningModule):
         return self.model(x)
 
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        _ = batch_idx
         loss = self._compute_loss(batch, stage="train")
         return loss
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> None:
+        _ = batch_idx
         self._compute_loss(batch, stage="val")
 
     def on_validation_epoch_end(self) -> None:
@@ -158,12 +167,10 @@ class MatchModule(L.LightningModule):
         batch: dict[str, torch.Tensor],
         stage: str,
     ) -> torch.Tensor:
-        if self.in_batch_neg:
-            loss = self._inbatch_neg_step(batch, stage=stage)
-        elif self.mode == 1:  # pair-wise
-            loss = self._pairwise_step(batch)
-        else:  # point-wise
-            loss = self._pointwise_step(batch)
+        if not self.in_batch_neg:
+            raise ValueError
+
+        loss = self._inbatch_neg_step(batch, stage=stage)
 
         # Regularization
         reg_loss = self.reg_loss_fn(self.model)
@@ -179,8 +186,8 @@ class MatchModule(L.LightningModule):
         stage: str,
     ) -> torch.Tensor:
         """In-batch negative sampling step for two-tower models."""
-        user_emb = self.model.user_tower(batch)  # [B, D]
-        item_emb = self.model.item_tower(batch)  # [B, D]
+        user_emb = self.tower_model.user_tower(batch)  # [B, D]
+        item_emb = self.tower_model.item_tower(batch)  # [B, D]
 
         # Squeeze extra dims that some models keep for inference convenience
         if user_emb.dim() > 2:
@@ -188,28 +195,22 @@ class MatchModule(L.LightningModule):
         if item_emb.dim() > 2:
             item_emb = item_emb.squeeze(1)
 
+        # scores[i, j] = sim(user_i, item_j); diagonal is the positive pairs
         scores = torch.matmul(user_emb, item_emb.t()) / self.temperature  # [B, B]
         B = scores.size(0)
 
-        if self.mode == 1:  # pair-wise BPR via in-batch negatives
+        # Optionally subsample negatives per sample
+        if self.in_batch_neg_ratio is not None:
             neg_indices = _inbatch_negative_sampling(
                 scores, self.in_batch_neg_ratio, self.hard_negative, self._sampler_generator
-            )  # [B, k]
+            )
             logits = _gather_inbatch_logits(scores, neg_indices)  # [B, 1+k]
-            loss = self.criterion(logits[:, 0], logits[:, 1:].mean(dim=1))  # BPR: mean of negatives
+            targets = torch.zeros(B, dtype=torch.long, device=self.device)  # positive is always column 0
         else:
-            # Default: list-wise / point-wise via full-batch CrossEntropy
-            # Optionally subsample negatives per sample
-            if self.in_batch_neg_ratio is not None:
-                neg_indices = _inbatch_negative_sampling(
-                    scores, self.in_batch_neg_ratio, self.hard_negative, self._sampler_generator
-                )
-                logits = _gather_inbatch_logits(scores, neg_indices)  # [B, 1+k]
-            else:
-                logits = scores  # [B, B]  (pos on diagonal)
-
+            logits = scores  # [B, B] (pos on diagonal)
             targets = torch.arange(B, device=self.device)
-            loss = self.criterion(logits, targets)
+
+        loss = self.criterion(logits, targets)
 
         # Accumulate MatchMetrics during validation
         if stage == "val":
@@ -224,23 +225,15 @@ class MatchModule(L.LightningModule):
         self,
         batch: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        """Pair-wise BPR step.  Model must return (pos_score, neg_score)."""
-        pos_score, neg_score = self.model(batch)
-        return self.criterion(pos_score, neg_score)
+        _ = batch
+        raise NotImplementedError
 
     def _pointwise_step(
         self,
         batch: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        """Point-wise step.  Batch must contain a 'label' key."""
-        if "label" not in batch:
-            raise KeyError(
-                "Point-wise mode (mode=0, in_batch_neg=False) expects a 'label' key in the batch. "
-                "Add it in the Dataset or switch to in_batch_neg=True."
-            )
-        y = batch["label"].float()
-        y_pred = self.model(batch).squeeze(-1)
-        return self.criterion(y_pred, y)
+        _ = batch
+        raise NotImplementedError
 
     def configure_optimizers(self):
         optimizer = self._optimizer(self.model.parameters())
@@ -289,11 +282,11 @@ class MatchModule(L.LightningModule):
         if not (hasattr(self.model, "user_tower") and hasattr(self.model, "item_tower")):
             raise ValueError(f"{type(self.model).__name__} does not support set_mode() / tower inference.")
 
-        if hasattr(self.model, "set_mode"):
-            self.model.set_mode(mode)
+        if hasattr(self.tower_model, "set_mode"):
+            self.tower_model.set_mode(mode)
 
         self.model.eval()
-        tower_fn = self.model.user_tower if mode == "user" else self.model.item_tower
+        tower_fn = self.tower_model.user_tower if mode == "user" else self.tower_model.item_tower
 
         all_embeddings: list[torch.Tensor] = []
         for batch in dataloader:
@@ -306,11 +299,4 @@ class MatchModule(L.LightningModule):
         return torch.cat(all_embeddings, dim=0)  # [N, D]
 
     def _build_criterion(self) -> nn.Module:
-        if self.mode == 0:
-            return nn.CrossEntropyLoss() if self.in_batch_neg else nn.BCELoss()
-        elif self.mode == 1:
-            return BPRLoss()
-        elif self.mode == 2:
-            return nn.CrossEntropyLoss()
-        else:
-            raise ValueError(f"mode must be 0/1/2, got {self.mode}")
+        return nn.CrossEntropyLoss()

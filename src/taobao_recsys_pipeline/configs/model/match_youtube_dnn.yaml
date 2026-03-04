@@ -20,7 +20,6 @@ model:
     dropout: 0.2
     activation: relu
 
-mode: 2 # 0=point-wise | 1=pair-wise | 2=list-wise
 in_batch_neg: true
 in_batch_neg_ratio: null
 hard_negative: false

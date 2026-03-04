@@ -1,0 +1,93 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - data: taobao
+  - callbacks: default
+  - logger: csv
+  - trainer: cpu
+  - paths: default
+  - extras: default
+  - hydra: default
+
+  - experiment: null
+  - hparams_search: null
+  - optional local: default
+  - debug: null
+
+task_name: "ctr-train"
+tags: ["ctr", "train", "debug"]
+
+train: True
+test: False
+ckpt_path: null
+seed: 728
+
+optimized_metric: "val/mrr"
+
+data:
+  task: ctr
+  file: ${paths.data_dir}/processed/user_data.parquet
+  max_seq_len: 50
+  batch_size: 2
+  num_workers: 0
+  listwise_k: 5
+  n1_recall: 20
+  n2_popular: 20
+  recall_candidates_file: null
+  sampler_seed: 728
+
+model:
+  _target_: taobao_recsys_pipeline.l_module.ctr_module.CTRModule
+  model:
+    _target_: taobao_recsys_pipeline.models.ranking.din.DIN
+    session_features:
+      _target_: taobao_recsys_pipeline.basic.features.get_hist_features
+      file: ${paths.data_dir}/processed/features/user_sequence_features.json
+      include: [hist_action, hist_hour_of_day, hist_day_of_week, hist_month_of_year, hist_is_weekend, hist_delta_time]
+      embed_dim: 16
+      pooling: mean
+    history_features:
+      _target_: taobao_recsys_pipeline.basic.features.get_history_item_features
+      file: ${paths.data_dir}/processed/features/item_sparse_features.json
+      embed_dim: 16
+      pooling: concat
+    target_features:
+      _target_: taobao_recsys_pipeline.basic.features.get_target_features
+      file: ${paths.data_dir}/processed/features/item_sparse_features.json
+      embed_dim: 16
+    mlp:
+      _target_: taobao_recsys_pipeline.basic.layers.MLP
+      _partial_: true
+      output_layer: true
+      dims: [128, 64]
+      dropout: 0.1
+      activation: dice
+    activation_unit:
+      _target_: taobao_recsys_pipeline.models.ranking.din.ActivationUnit
+      _partial_: true
+      dims: [36]
+      activation: dice
+      use_softmax: true
+  val_at_k_list: [1, 3, 5]
+
+  optimizer:
+    _target_: torch.optim.AdamW
+    _partial_: true
+    lr: 0.001
+    weight_decay: 0.0001
+
+  scheduler: null
+
+callbacks:
+  model_checkpoint:
+    monitor: "val/mrr"
+    mode: "max"
+  early_stopping:
+    monitor: "val/mrr"
+    mode: "max"
+    patience: 10
+
+trainer:
+  max_epochs: 1
+  log_every_n_steps: 1

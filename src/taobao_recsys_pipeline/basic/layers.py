@@ -138,7 +138,7 @@ class EmbeddingLayer(nn.Module):
         x: dict[str, torch.Tensor],
         features: list[BaseFeature] | None = None,
         squeeze_dim: bool = False,
-    ):
+    ) -> torch.Tensor:
         """Embed a subset (or all) features and optionally flatten.
 
         Parameters

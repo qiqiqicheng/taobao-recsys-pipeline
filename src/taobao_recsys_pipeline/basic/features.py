@@ -92,6 +92,7 @@ def get_hist_features(
     file: str,
     embed_dim: int | dict[str, int],
     pooling: str = "mean",
+    include: list[str] | None = None,
 ) -> list[SequenceFeature]:
     """Load ``SequenceFeature`` list for the user tower (``hist_*`` fields).
 
@@ -106,11 +107,15 @@ def get_hist_features(
     embed_dim:
         Shared embedding dimension (int) or per-feature mapping ``{name: dim}``.
     pooling:
-        Default pooling strategy for every feature (can be overridden per-feature
-        via ``embed_dim`` dict if needed).
+        Default pooling strategy for every feature.
+    include:
+        Optional allow-list of feature names to include.
     """
     with open(file) as f:
         configs = json.load(f)
+    if include is not None:
+        include_set = set(include)
+        configs = [cfg for cfg in configs if cfg["name"] in include_set]
     return [
         SequenceFeature(
             **cfg,
@@ -119,6 +124,36 @@ def get_hist_features(
         )
         for cfg in configs
     ]
+
+
+def get_history_item_features(
+    file: str,
+    embed_dim: int | dict[str, int],
+    pooling: str = "concat",
+) -> list[SequenceFeature]:
+    """Build history-item ``SequenceFeature`` list (hist_item_id/hist_cat_id).
+
+    The source config is ``item_sparse_features.json`` with base names like
+    ``item_id`` / ``cat_id``. This helper maps them to history keys expected by
+    DIN list-wise scoring and uses ``concat`` pooling by default to preserve
+    sequence information.
+    """
+    with open(file) as f:
+        configs = json.load(f)
+
+    result: list[SequenceFeature] = []
+    for cfg in configs:
+        hist_name = f"hist_{cfg['name']}"
+        dim = embed_dim if isinstance(embed_dim, int) else embed_dim[hist_name]
+        result.append(
+            SequenceFeature(
+                name=hist_name,
+                vocab_size=cfg["vocab_size"],
+                embed_dim=dim,
+                pooling=pooling,
+            )
+        )
+    return result
 
 
 def get_target_features(
