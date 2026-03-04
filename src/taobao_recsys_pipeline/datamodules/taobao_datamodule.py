@@ -311,6 +311,7 @@ class TaobaoDataModule(L.LightningDataModule):
         self.max_seq_len = max_seq_len
         self.batch_size = batch_size
         self.num_workers = num_workers
+        log.info(f"Using num_workers={self.num_workers} for DataLoader")
 
         self.task = task
         self.listwise_k = listwise_k

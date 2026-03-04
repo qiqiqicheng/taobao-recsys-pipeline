@@ -24,7 +24,7 @@ in_batch_neg: true
 in_batch_neg_ratio: null
 hard_negative: false
 temperature: 1.0
-val_at_k_list: [ 2 ]
+val_at_k_list: [ 1, 5, 10 ]
 
 optimizer:
   _target_: torch.optim.AdamW
@@ -42,6 +42,6 @@ scheduler:
   eta_min: 1e-6
 
 # Regularization loss (optional, defaults to no regularization)
-# reg_loss:
-#   _target_: taobao_recsys_pipeline.losses.losses.RegularizationLoss
-#   embedding_l2: 1e-5
+reg_loss:
+  _target_: taobao_recsys_pipeline.losses.losses.RegularizationLoss
+  embedding_l2: 1e-5

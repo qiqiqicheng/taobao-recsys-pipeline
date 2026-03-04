@@ -26,6 +26,7 @@ dependencies = [
     "pandas>=2.3.3",
     "pyarrow>=23.0.1",
     "rich>=14.3.3",
+    "wandb>=0.25.0",
 ]
 
 [project.urls]

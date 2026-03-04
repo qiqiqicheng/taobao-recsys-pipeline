@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - override /data: taobao
+  - override /model: match_youtube_dnn
+
+tags: ["mnist", "simple_dense_net"]
+
+data:
+  max_seq_len: 200
+  batch_size: 64
+
+model:
+  # TODO: add more exp configs

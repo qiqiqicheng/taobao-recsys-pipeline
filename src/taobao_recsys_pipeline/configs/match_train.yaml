@@ -7,8 +7,8 @@ defaults:
   - data: taobao
   - model: match_youtube_dnn
   - callbacks: default
-  - logger: csv
-  - trainer: cpu
+  - logger: wandb
+  - trainer: gpu
   - paths: default
   - extras: default
   - hydra: default
